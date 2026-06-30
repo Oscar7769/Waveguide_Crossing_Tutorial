@@ -1,5 +1,5 @@
 - 說明的部分可以看.ipynb檔的Tutorial 
 - 但實際執行的時候還是要跑.py檔
 - factorization machine要跟檔案放在同一資料夾
-- 執行時，在終端輸入'''mpirun -n '核心數' python py檔名.py > log檔名.log 2>&1'''
-- 例如，'''mpirun -n 31 python Waveguide_Crossing.py > test.log 2>&1'''
+- 執行時，在Terminal終端輸入```mpirun -n '核心數' python py檔名.py > log檔名.log 2>&1```
+- 例如，```mpirun -n 31 python Waveguide_Crossing.py > test.log 2>&1```
