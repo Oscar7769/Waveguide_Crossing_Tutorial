@@ -26,6 +26,10 @@ except ImportError:
 import meep as mp
 from factorization_machine import FactorizationMachine
 
+# ==============================================================================
+# SECTION 0: GLOBAL PARAMETERS
+# ==============================================================================
+
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
@@ -59,7 +63,9 @@ TANH_BETA = 50
 TANH_ETA = 0.5
 SMOOTH_THRESHOLD = 0.5
 NUM_SWEEPS = 1000
-
+# ==============================================================================
+# SECTION 1: GEOMETRY
+# ==============================================================================
 
 def gaussian_kernel(size=KERNEL_SIZE, sigma=KERNEL_SIGMA):
     ax = np.arange(-(size//2), size//2 + 1)
@@ -74,9 +80,15 @@ def tanh_projection(x, beta=TANH_BETA, eta=TANH_ETA):
     return num / den
 
 def enforce_reflection_symmetry(matrix_quadrant):
+    """將四分之一的矩陣 (Q) 擴充為具備四重對稱 (上下、左右、對角線) 的完整矩陣"""
     Q = np.array(matrix_quadrant)
+    
+    # 1. 強制 Q 本身具備對角線對稱 (確保 90 度旋轉不變)
+    # 取 Q 的上三角矩陣，並將其翻轉疊加到下三角
     Q_upper = np.triu(Q)
-    Q_symmetric = Q_upper + np.triu(Q, 1).T
+    Q_symmetric = Q_upper + np.triu(Q, 1).T 
+    
+    # 2. 執行原有的上下與左右鏡射展開
     top_half = np.hstack((Q_symmetric, np.fliplr(Q_symmetric)))
     bottom_half = np.hstack((np.flipud(Q_symmetric), np.flipud(np.fliplr(Q_symmetric))))
     
@@ -127,22 +139,30 @@ def generate_smooth_random_config(rows, cols):
     binary = (smooth_noise > SMOOTH_THRESHOLD).astype(int).flatten()
     return binary
 
+# ==============================================================================
+# SECTION 2: OPTIMIZATION SIMULATION
+# ==============================================================================
+
 def evaluate_mdm_mode(binary_vector, grid_rows, grid_cols, mode_name):
     mp.Simulation(cell_size=CELL, resolution=1, boundary_layers=[]).reset_meep()
     mdm_structure = create_projected_geometry(binary_vector, grid_rows, grid_cols)
     
-    input_wg_center_x = -MDM_LC / 2 - (WG_LENGTH + DPML) / 2   
-    through_wg_center_x = MDM_LC / 2 + (WG_LENGTH + DPML) / 2   
-    cross_top_center_y = MDM_LC / 2 + (WG_LENGTH + DPML) / 2    
-    cross_bot_center_y = -MDM_LC / 2 - (WG_LENGTH + DPML) / 2   
+    input_wg_center_x = -MDM_LC / 2 - (WG_LENGTH + DPML) / 2    # 西
+    through_wg_center_x = MDM_LC / 2 + (WG_LENGTH + DPML) / 2   # 東
+    cross_top_center_y = MDM_LC / 2 + (WG_LENGTH + DPML) / 2    # 北
+    cross_bot_center_y = -MDM_LC / 2 - (WG_LENGTH + DPML) / 2   # 南
     
     fixed_geometry = [
+        # 西側波導 (Input)
         mp.Block(size=mp.Vector3(WG_LENGTH + DPML + 0.1, WG_WIDTH, mp.inf), 
                  center=mp.Vector3(input_wg_center_x, 0), material=SI_MEDIUM),
+        # 東側波導 (Through)
         mp.Block(size=mp.Vector3(WG_LENGTH + DPML + 0.1, WG_WIDTH, mp.inf), 
                  center=mp.Vector3(through_wg_center_x, 0), material=SI_MEDIUM),
+        # 北側波導 (Cross Top)
         mp.Block(size=mp.Vector3(WG_WIDTH, WG_LENGTH + DPML + 0.1, mp.inf), 
                  center=mp.Vector3(0, cross_top_center_y), material=SI_MEDIUM),
+        # 南側波導 (Cross Bottom)
         mp.Block(size=mp.Vector3(WG_WIDTH, WG_LENGTH + DPML + 0.1, mp.inf), 
                  center=mp.Vector3(0, cross_bot_center_y), material=SI_MEDIUM),
     ]
@@ -154,8 +174,8 @@ def evaluate_mdm_mode(binary_vector, grid_rows, grid_cols, mode_name):
     mon_x_through = MDM_LC / 2 + WG_LENGTH / 2
     mon_y_cross_top = MDM_LC / 2 + WG_LENGTH / 2
     mon_y_cross_bot = -MDM_LC / 2 - WG_LENGTH / 2
-    monitor_size_y = mp.Vector3(0, WG_WIDTH * 5)
-    monitor_size_x = mp.Vector3(WG_WIDTH * 5, 0)
+    monitor_size_y = mp.Vector3(0, WG_WIDTH * 5) # X方向波導的截面
+    monitor_size_x = mp.Vector3(WG_WIDTH * 5, 0) # Y方向波導的截面 
     
     mode_props = {
         'TE0': {'band_num': 1, 'parity': mp.EVEN_Y, 'global_band': 1},
@@ -194,6 +214,10 @@ def evaluate_mdm_mode(binary_vector, grid_rows, grid_cols, mode_name):
     sim.reset_meep()
     return {'through': T_through_list}
 
+# ==============================================================================
+# SECTION 3: VISUALIZATION & ANALYSIS
+# ==============================================================================
+
 def plot_transmission_spectrum(wls, trans_dbs, mode_name, output_folder):
     from scipy.interpolate import make_interp_spline
     plt.figure(figsize=(6, 5))
@@ -203,13 +227,21 @@ def plot_transmission_spectrum(wls, trans_dbs, mode_name, output_folder):
     wls = wls[sorted_idx]
     trans_dbs = trans_dbs[sorted_idx]
     
+    # 將 mode_name 轉換成帶有下標的 LaTeX 格式
+    if mode_name == 'TE0':
+        display_label = r'$TE_0$'
+    elif mode_name == 'TE1':
+        display_label = r'$TE_1$'
+    else:
+        display_label = mode_name
+
     if len(wls) >= 3:
         x_smooth = np.linspace(wls.min(), wls.max(), 100)
         spline = make_interp_spline(wls, trans_dbs, k=2)
         y_smooth = spline(x_smooth)
-        plt.plot(x_smooth, y_smooth, 'b-', linewidth=2, label='FMQA')
+        plt.plot(x_smooth, y_smooth, 'b-', linewidth=2, label=display_label)
     else:
-        plt.plot(wls, trans_dbs, 'b-', linewidth=2, label='FMQA')
+        plt.plot(wls, trans_dbs, 'b-', linewidth=2, label=display_label)
         
     plt.title(f"Transmission Spectrum ({mode_name})", fontsize=16)
     plt.xlabel(r"wavelength ($\mu$m)", fontsize=14)
@@ -224,21 +256,25 @@ def plot_transmission_spectrum(wls, trans_dbs, mode_name, output_folder):
 def perform_detailed_final_analysis(best_config, grid_rows, grid_cols, output_folder):
     print(f"\n>>> Starting Final Detailed MEEP Analysis (TE0 Waveguide Crossing) <<<")
     
-
+    # [修正 1] 將 binary_vector 修正為 best_config
     mdm_structure = create_projected_geometry(best_config, grid_rows, grid_cols)
     
-    input_wg_center_x = -MDM_LC / 2 - (WG_LENGTH + DPML) / 2    
-    through_wg_center_x = MDM_LC / 2 + (WG_LENGTH + DPML) / 2   
-    cross_top_center_y = MDM_LC / 2 + (WG_LENGTH + DPML) / 2    
-    cross_bot_center_y = -MDM_LC / 2 - (WG_LENGTH + DPML) / 2   
+    input_wg_center_x = -MDM_LC / 2 - (WG_LENGTH + DPML) / 2    # 西
+    through_wg_center_x = MDM_LC / 2 + (WG_LENGTH + DPML) / 2   # 東
+    cross_top_center_y = MDM_LC / 2 + (WG_LENGTH + DPML) / 2    # 北
+    cross_bot_center_y = -MDM_LC / 2 - (WG_LENGTH + DPML) / 2   # 南
     
     fixed_geometry = [
+        # 西側波導 (Input)
         mp.Block(size=mp.Vector3(WG_LENGTH + DPML + 0.1, WG_WIDTH, mp.inf), 
                  center=mp.Vector3(input_wg_center_x, 0), material=SI_MEDIUM),
+        # 東側波導 (Through)
         mp.Block(size=mp.Vector3(WG_LENGTH + DPML + 0.1, WG_WIDTH, mp.inf), 
                  center=mp.Vector3(through_wg_center_x, 0), material=SI_MEDIUM),
+        # 北側波導 (Cross Top)
         mp.Block(size=mp.Vector3(WG_WIDTH, WG_LENGTH + DPML + 0.1, mp.inf), 
                  center=mp.Vector3(0, cross_top_center_y), material=SI_MEDIUM),
+        # 南側波導 (Cross Bottom)
         mp.Block(size=mp.Vector3(WG_WIDTH, WG_LENGTH + DPML + 0.1, mp.inf), 
                  center=mp.Vector3(0, cross_bot_center_y), material=SI_MEDIUM),
     ]
@@ -250,8 +286,8 @@ def perform_detailed_final_analysis(best_config, grid_rows, grid_cols, output_fo
     mon_x_through = MDM_LC / 2 + WG_LENGTH / 2
     mon_y_cross_top = MDM_LC / 2 + WG_LENGTH / 2
     mon_y_cross_bot = -MDM_LC / 2 - WG_LENGTH / 2
-    monitor_size_y = mp.Vector3(0, WG_WIDTH * 3)
-    monitor_size_x = mp.Vector3(WG_WIDTH * 5, 0) 
+    monitor_size_y = mp.Vector3(0, WG_WIDTH * 3) # X方向波導的截面
+    monitor_size_x = mp.Vector3(WG_WIDTH * 5, 0) # Y方向波導的截面 
     
     mode_definitions = ['TE0', 'TE1']
     detailed_results = {}
@@ -430,6 +466,10 @@ def plot_time_statistics_pie_chart(total_fm, total_sa, total_fdtd, other, output
                 dpi=300, bbox_extra_artists=(lgd,), bbox_inches='tight')
     plt.close()
 
+# ==============================================================================
+# SECTION 4: MASTER/WORKER LOGIC
+# ==============================================================================
+
 def train_fm_model(model, X_train, Y_train, num_epoch, learning_rate, batch_size=32):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
@@ -515,7 +555,11 @@ def parallel_evaluate(tasks, fom_cache, grid_rows, grid_cols):
             
             TE0_T = np.array(trans_res['TE0']['through'])
             TE1_T = np.array(trans_res['TE1']['through'])
+            
+            # 平均穿透率 (越接近 1 越好)
             avg_T = np.mean(np.concatenate([TE0_T, TE1_T]))
+            
+            # 因為演算法尋找最小值，所以設定為 1 - avg_T
             fom = 1.0 - avg_T
             
             results[task_idx] = fom
