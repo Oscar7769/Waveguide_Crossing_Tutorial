@@ -355,7 +355,7 @@ def perform_detailed_final_analysis(best_config, grid_rows, grid_cols, output_fo
         from mpl_toolkits.axes_grid1 import make_axes_locatable
         divider = make_axes_locatable(ax)
         cax = divider.append_axes("right", size="5%", pad=0.05)
-        fig.colorbar(im, cax=cax, label=r'Intensity $|E_z|^2$')
+        fig.colorbar(im, cax=cax, label=r'Intensity $|E|^2$')
         ax.set_title(f"Optimized Final Structure ({mode_name})", fontsize=16)
         ax.set_xlabel(r"x ($\mu$m)", fontsize=14)
         ax.set_ylabel(r"y ($\mu$m)", fontsize=14)
